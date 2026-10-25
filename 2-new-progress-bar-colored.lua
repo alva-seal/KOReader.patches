@@ -19,7 +19,7 @@ local ABANDONED_COLOR = {0x66, 0x00, 0x33} -- Material Red (RGB components)
 local BORDER_W = Screen:scaleBySize(0.5) -- border width around track (0 to disable)
 local BORDER_COLOR = Blitbuffer.COLOR_BLACK -- border color
 local BAR_SHIFT_X = Screen:scaleBySize(0)
-local BAR_SHIFT_Y = Screen:scaleBySize(-6)
+local BAR_SHIFT_Y = Screen:scaleBySize(-12)
 --======================================================================================
 -- stylua: ignore end
 
