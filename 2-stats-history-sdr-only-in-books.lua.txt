@@ -1,0 +1,41 @@
+local DocumentRegistry = require("document/documentregistry")
+local ReadHistory = require("readhistory")
+local DocSettings = require("docsettings")
+local util = require("util")
+
+local allowed_folder = "/mnt/onboard/Books/"
+
+local function isAllowed(file)
+    return file ~= nil and util.stringStartsWith(file, allowed_folder)
+end
+
+-- 1. Disable Reading Statistics outside /mnt/onboard/Books/
+local orig_openDocument = DocumentRegistry.openDocument
+DocumentRegistry.openDocument = function(self, file, provider)
+    local doc = orig_openDocument(self, file, provider)
+    if doc and not isAllowed(file) then
+        doc.is_pic = true
+    end
+    return doc
+end
+
+-- 2. Disable Read History outside /mnt/onboard/Books/
+local orig_addItem = ReadHistory.addItem
+function ReadHistory:addItem(file, ts, no_flush)
+    if not isAllowed(file) then
+        return
+    end
+    orig_addItem(self, file, ts, no_flush)
+end
+
+-- 3. Disable .sdr sidecar creation and saving outside /mnt/onboard/Books/
+local orig_docSettingsOpen = DocSettings.open
+function DocSettings:open(doc_path, ...)
+    local settings = orig_docSettingsOpen(self, doc_path, ...)
+    if settings and not isAllowed(doc_path) then
+        -- Prevent writing metadata.lua or creating the .sdr folder
+        settings.flush = function() end
+        settings.flushCustomMetadata = function() end
+    end
+    return settings
+end
