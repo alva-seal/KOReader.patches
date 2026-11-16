@@ -1,30 +1,32 @@
 --[[
-KOReader user patch: dark-magenta menu text and icons.
+KOReader user patch: dark-magenta text and monochrome icons in KOReader menus.
 
 Place this file in koreader/patches/ and restart KOReader.
-On color displays, the tint is RGB (112, 0, 70). On monochrome e-ink,
-menu text and icons use dark gray instead. Remove the file to undo the patch.
+On color screens, text and eligible monochrome menu icons are tinted RGB (112, 0, 70).
+On grayscale screens, text uses dark gray and icons are left unchanged.
+Remove this file to undo the patch.
 ]]
 
 local BlitBuffer = require("ffi/blitbuffer")
 local Screen = require("device").screen
 local Menu = require("ui/widget/menu")
+local TouchMenu = require("ui/widget/touchmenu")
 local TextWidget = require("ui/widget/textwidget")
 local IconWidget = require("ui/widget/iconwidget")
 
 local is_color = Screen:isColorScreen()
 local magenta = is_color and BlitBuffer.ColorRGB32(112, 0, 70, 0xFF) or nil
-local fallback = BlitBuffer.COLOR_DARK_GRAY
+local gray_text = BlitBuffer.COLOR_DARK_GRAY
 local original_text_paint = TextWidget.paintTo
 local original_icon_paint = IconWidget.paintTo
 
--- Use RGB glyph painting only for supported XText widgets. Keep the regular
--- KOReader color value on every other widget to avoid passing RGB32 into code
--- paths that expect a grayscale color.
+-- TextWidget's stock painter does not preserve RGB32 colors on all paths.
+-- Only use RGB32 for shaped XText glyphs on color screens. Everywhere else,
+-- retain a grayscale color so SimpleUI and monochrome paths never receive RGB32.
 if is_color then
     local RenderText = require("ui/rendertext")
     TextWidget.paintTo = function(self, bb, x, y)
-        if not self._menu_dark_magenta or not self.use_xtext or not magenta
+        if not self._dark_magenta_menu or not self.use_xtext or not magenta
             or not self.fgcolor or BlitBuffer.isColor8(self.fgcolor)
             or not Screen:isColorScreen() then
             return original_text_paint(self, bb, x, y)
@@ -51,54 +53,67 @@ if is_color then
     end
 end
 
--- Tint only icon widgets that belong to a menu.
+-- Tint only menu IconWidgets backed by a plain 8-bit mask. Other icon formats
+-- (including alpha/color images that a plugin may provide) use KOReader's
+-- original painter unchanged. Work on a temporary mask; never mutate SimpleUI's
+-- cached icon buffer.
 IconWidget.paintTo = function(self, bb, x, y)
-    if not self._menu_dark_magenta or not is_color or not magenta or self.hide then
+    if not self._dark_magenta_menu or not is_color or not magenta or self.hide
+        or not self._bb or self._bb:getType() ~= BlitBuffer.TYPE_BB8 then
         return original_icon_paint(self, bb, x, y)
     end
     local size = self:getSize()
     local Geom = require("ui/geometry")
     self.dimen = self.dimen or Geom:new{ x = x, y = y, w = size.w, h = size.h }
     self.dimen.x, self.dimen.y = x, y
-    self._bb:invert()
-    bb:colorblitFromRGB32(self._bb, x, y, self._offset_x, self._offset_y,
-        size.w, size.h, magenta)
-    self._bb:invert()
+    local mask = BlitBuffer.new(size.w, size.h, BlitBuffer.TYPE_BB8)
+    mask:blitFrom(self._bb, 0, 0, self._offset_x, self._offset_y, size.w, size.h)
+    mask:invert()
+    bb:colorblitFromRGB32(mask, x, y, 0, 0, size.w, size.h, magenta)
+    mask:free()
+    if self.invert then bb:invertRect(x, y, size.w, size.h) end
 end
 
-local function tint_menu_tree(root)
+local function markMenuTree(root)
     local visited = {}
     local function walk(widget)
         if type(widget) ~= "table" or visited[widget] then return end
         visited[widget] = true
         local mt = getmetatable(widget)
         if mt == TextWidget then
-            widget._menu_dark_magenta = true
-            -- The custom RGB painter handles XText; unsupported painters get a
-            -- safe gray fallback rather than an RGB color they may not accept.
-            widget.fgcolor = (is_color and widget.use_xtext and magenta) or fallback
+            widget._dark_magenta_menu = true
+            -- The custom XText painter handles RGB. Other text paths stay gray,
+            -- which is safe for KOReader, SimpleUI, and grayscale blitters.
+            widget.fgcolor = (is_color and widget.use_xtext and magenta) or gray_text
         elseif mt == IconWidget then
-            widget._menu_dark_magenta = true
+            widget._dark_magenta_menu = true
         end
         for i = 1, #widget do walk(widget[i]) end
     end
     walk(root)
 end
 
--- Retint after menu rows are created or rebuilt.
-local original_update_items = Menu.updateItems
-if original_update_items then
-    Menu.updateItems = function(self, ...)
-        local result = original_update_items(self, ...)
-        tint_menu_tree(self)
-        return result
+local function wrapMenuClass(class)
+    local original_update = class.updateItems
+    if original_update and not class._dark_magenta_update_wrapped then
+        class._dark_magenta_update_wrapped = true
+        class.updateItems = function(self, ...)
+            local result = original_update(self, ...)
+            markMenuTree(self)
+            return result
+        end
+    end
+    local original_init = class.init
+    if original_init and not class._dark_magenta_init_wrapped then
+        class._dark_magenta_init_wrapped = true
+        class.init = function(self, ...)
+            local result = original_init(self, ...)
+            markMenuTree(self)
+            return result
+        end
     end
 end
-local original_init = Menu.init
-if original_init then
-    Menu.init = function(self, ...)
-        local result = original_init(self, ...)
-        tint_menu_tree(self)
-        return result
-    end
-end
+
+-- Traditional settings/dialog menus and the distinct hierarchical top TouchMenu.
+wrapMenuClass(Menu)
+wrapMenuClass(TouchMenu)
