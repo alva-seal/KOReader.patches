@@ -19,9 +19,9 @@ local gray_text = BlitBuffer.COLOR_DARK_GRAY
 local original_text_paint = TextWidget.paintTo
 local original_icon_paint = IconWidget.paintTo
 
--- Stock TextWidget passes its fgcolor through grayscale-oriented rendering
--- paths. On color screens, use RGB32 only for explicitly marked XText glyphs.
--- Unmarked text and grayscale displays retain KOReader's original painter.
+-- Stock TextWidget uses grayscale-oriented rendering on some paths. On color
+-- screens, use RGB32 only for marked XText glyphs; otherwise call the original
+-- painter with a grayscale-safe fgcolor.
 if is_color then
     local RenderText = require("ui/rendertext")
     TextWidget.paintTo = function(self, bb, x, y)
@@ -53,7 +53,7 @@ if is_color then
 end
 
 -- Tint only flagged, flattened 8-bit monochrome menu icons on color screens.
--- Never mutate an IconWidget's cached _bb (SimpleUI and other plugins may share it).
+-- Make a temporary copy: IconWidget._bb is cached and may be shared with SimpleUI.
 IconWidget.paintTo = function(self, bb, x, y)
     if not self._dark_magenta_menu or not is_color or not magenta or self.hide then
         return original_icon_paint(self, bb, x, y)
@@ -67,8 +67,7 @@ IconWidget.paintTo = function(self, bb, x, y)
     self.dimen.x, self.dimen.y = x, y
     local mask = BlitBuffer.new(size.w, size.h, BlitBuffer.TYPE_BB8)
     mask:blitFrom(self._bb, 0, 0, self._offset_x, self._offset_y, size.w, size.h)
-    -- KOReader's flattened monochrome icons are black artwork on white.
-    -- Invert a temporary copy so artwork becomes the color-blit coverage mask.
+    -- KOReader's flattened black-on-white icons become white-on-black masks.
     mask:invert()
     bb:colorblitFromRGB32(mask, x, y, 0, 0, size.w, size.h, magenta)
     mask:free()
@@ -83,8 +82,7 @@ local function markMenuTree(root)
         local mt = getmetatable(widget)
         if mt == TextWidget then
             widget._dark_magenta_menu = true
-            -- The RGB painter handles XText; all other painters, including
-            -- grayscale mode and non-XText, get a grayscale-safe fallback.
+            -- Custom RGB painter handles XText; all other paths get grayscale.
             widget.fgcolor = (is_color and widget.use_xtext and magenta) or gray_text
         elseif mt == IconWidget then
             widget._dark_magenta_menu = true
@@ -115,6 +113,6 @@ local function wrapMenuClass(class)
     end
 end
 
--- Traditional menus plus the hierarchical top TouchMenu (a different class).
+-- Standard settings menus and the hierarchical top TouchMenu are separate classes.
 wrapMenuClass(Menu)
 wrapMenuClass(TouchMenu)
