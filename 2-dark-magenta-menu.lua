@@ -1,10 +1,9 @@
 --[[
-KOReader user patch: dark-magenta menu text, icons, and rules.
+KOReader user patch: dark-magenta menu text and icons.
 
 Place this file in koreader/patches/ and restart KOReader.
 On color displays, the tint is RGB (112, 0, 70). On monochrome e-ink,
-magenta cannot be displayed, so menu marks use dark gray instead.
-Remove the file to undo the patch.
+menu text and icons use dark gray instead. Remove the file to undo the patch.
 ]]
 
 local BlitBuffer = require("ffi/blitbuffer")
@@ -12,22 +11,22 @@ local Screen = require("device").screen
 local Menu = require("ui/widget/menu")
 local TextWidget = require("ui/widget/textwidget")
 local IconWidget = require("ui/widget/iconwidget")
-local LineWidget = require("ui/widget/linewidget")
-local UnderlineContainer = require("ui/widget/container/underlinecontainer")
 
 local is_color = Screen:isColorScreen()
-local magenta = is_color and BlitBuffer.ColorRGB32(112, 0, 70, 0xFF) or BlitBuffer.COLOR_DARK_GRAY
+local magenta = is_color and BlitBuffer.ColorRGB32(112, 0, 70, 0xFF) or nil
+local fallback = BlitBuffer.COLOR_DARK_GRAY
 local original_text_paint = TextWidget.paintTo
 local original_icon_paint = IconWidget.paintTo
 
--- TextWidget's normal painter uses a grayscale mask. On color screens, render
--- shaped glyph masks through RGB32 so the magenta tint is preserved.
+-- Use RGB glyph painting only for supported XText widgets. Keep the regular
+-- KOReader color value on every other widget to avoid passing RGB32 into code
+-- paths that expect a grayscale color.
 if is_color then
     local RenderText = require("ui/rendertext")
     TextWidget.paintTo = function(self, bb, x, y)
-        if not self._menu_dark_magenta or not self.fgcolor
-            or BlitBuffer.isColor8(self.fgcolor) or not Screen:isColorScreen()
-            or not self.use_xtext then
+        if not self._menu_dark_magenta or not self.use_xtext or not magenta
+            or not self.fgcolor or BlitBuffer.isColor8(self.fgcolor)
+            or not Screen:isColorScreen() then
             return original_text_paint(self, bb, x, y)
         end
         self:updateSize()
@@ -52,9 +51,9 @@ if is_color then
     end
 end
 
--- Tint only icon widgets discovered inside a menu. Other KOReader icons are untouched.
+-- Tint only icon widgets that belong to a menu.
 IconWidget.paintTo = function(self, bb, x, y)
-    if not self._menu_dark_magenta or not is_color or self.hide then
+    if not self._menu_dark_magenta or not is_color or not magenta or self.hide then
         return original_icon_paint(self, bb, x, y)
     end
     local size = self:getSize()
@@ -75,44 +74,18 @@ local function tint_menu_tree(root)
         local mt = getmetatable(widget)
         if mt == TextWidget then
             widget._menu_dark_magenta = true
-            widget.fgcolor = magenta
+            -- The custom RGB painter handles XText; unsupported painters get a
+            -- safe gray fallback rather than an RGB color they may not accept.
+            widget.fgcolor = (is_color and widget.use_xtext and magenta) or fallback
         elseif mt == IconWidget then
             widget._menu_dark_magenta = true
-        elseif mt == LineWidget then
-            widget.background = magenta
-        elseif mt == UnderlineContainer then
-            widget.color = magenta
         end
-
-        -- Keep focus underlines magenta; stock focus handlers reset them to black.
-        if widget._underline_container and not widget._menu_magenta_focus_patched then
-            widget._menu_magenta_focus_patched = true
-            local old_focus = widget.onFocus
-            local old_unfocus = widget.onUnfocus
-            if old_focus then
-                widget.onFocus = function(self, ...)
-                    local result = old_focus(self, ...)
-                    if self._underline_container then self._underline_container.color = magenta end
-                    return result
-                end
-            end
-            if old_unfocus then
-                widget.onUnfocus = function(self, ...)
-                    local result = old_unfocus(self, ...)
-                    if self._underline_container then self._underline_container.color = magenta end
-                    return result
-                end
-            end
-        end
-
-        if widget.line_color ~= nil then widget.line_color = magenta end
-        if widget.bottom_line_color ~= nil then widget.bottom_line_color = magenta end
         for i = 1, #widget do walk(widget[i]) end
     end
     walk(root)
 end
 
--- Menu:updateItems rebuilds its rows; tint after each rebuild and initialisation.
+-- Retint after menu rows are created or rebuilt.
 local original_update_items = Menu.updateItems
 if original_update_items then
     Menu.updateItems = function(self, ...)
