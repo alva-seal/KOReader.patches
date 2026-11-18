@@ -4,6 +4,8 @@
 -- Missing chapter names are exported under "Unknown Chapter".
 
 local _ = require("gettext")
+-- target/markdown.lua loads this module as `require("template/md")` and calls
+-- md.prepareBookContent dynamically, so patch the same cached module table.
 local md = require("template/md")
 
 local original_prepareBookContent = md.prepareBookContent
@@ -17,7 +19,7 @@ md.prepareBookContent = function(book, formatting_options, highlight_formatting,
     end
 
     for index, note in ipairs(book) do
-        if note and note[1] then
+        if type(note) == "table" and type(note[1]) == "table" then
             local safe_note = {}
             for key, value in pairs(note) do
                 safe_note[key] = value
